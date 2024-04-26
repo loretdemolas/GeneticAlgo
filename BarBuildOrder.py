@@ -1,6 +1,7 @@
 import concurrent
 import itertools
 import random
+import time  # For pausing and refreshing
 
 from matplotlib import pyplot as plt
 
@@ -12,18 +13,18 @@ tasks = {
     "Build Solar Collector": {"metal_cost": 150, "energy_cost": 0, "base_build_time": 28},
     "Build Energy Converter": {"metal_cost": 1, "energy_cost": 1250, "base_build_time": 27},
     "Wait 15 Seconds": {"metal_cost": 0, "energy_cost": 0, "base_build_time": 15},
+    "Build Advanced Solar Collector": {"metal_cost": 370, "energy_cost": 4000, "base_build_time": 82}
 }
 
 # Prerequisites for building tasks
 task_prerequisites = {
     "Build Builder": ["Build Factory"],
+    "Build Advanced Solar Collector": ["Build Builder"]
 }
 
 # Constants
 MAX_METAL_EXTRACTORS = 3
-METAL_RATE_GOAL = 10
-ENERGY_RATE_GOAL = 30
-METAL_ENERGY_RATIO = METAL_RATE_GOAL / ENERGY_RATE_GOAL
+DESIRED_ENERGY_METAL_RATIO = 10.0
 MAX_TASK = 100
 
 
@@ -43,6 +44,9 @@ class ResourceManager:
     def deduct_resources(self, metal, energy):
         self.current_metal -= metal
         self.current_energy -= energy
+
+    def get_build_power(self):
+        return self.build_power
 
     def get_current_metal(self):
         return self.current_metal
@@ -66,11 +70,14 @@ class ResourceManager:
             self.metal_rate += 1
         elif task_name == "Build Builder":
             self.build_power += 100
+        elif task_name == "Build Advanced Solar Collector":
+            self.energy_rate += 75
 
 
 # Class to manage the build order and track completed tasks
 class BuildOrderManager:
     def __init__(self, resource_manager, max_tasks=MAX_TASK, max_metal_extractors=MAX_METAL_EXTRACTORS):
+        self.build_order_time = 0
         self.resource_manager = resource_manager
         self.max_tasks = max_tasks
         self.max_metal_extractors = max_metal_extractors
@@ -80,7 +87,6 @@ class BuildOrderManager:
         self.available_tasks = [
             "Build Metal Extractor",
             "Build Solar Collector",
-            "Build Builder",
             "Build Energy Converter",
             "Build Factory",
             "Wait 15 Seconds",
@@ -101,6 +107,10 @@ class BuildOrderManager:
                 current_energy >= task["energy_cost"]
         )
 
+    def total_time(self, task_name):
+        task = tasks[task_name]
+        self.build_order_time += ((task["base_build_time"] * self.resource_manager.get_build_power())/100)
+
     def build_task(self, task_name):
         if not self.can_build(task_name):
             return -1  # Task can't be built
@@ -108,6 +118,7 @@ class BuildOrderManager:
         # Check if the task is "Wait 15 Seconds"
         if task_name == "Wait 15 Seconds":
             build_time = 15  # Directly set the build time to 15 seconds
+            self.total_time(task_name)
         else:
             # Calculate build time based on build power
             build_time = task["base_build_time"] / (self.resource_manager.build_power / 100)
@@ -117,7 +128,7 @@ class BuildOrderManager:
 
         self.build_order.append({"task": task_name, "build_time": build_time})
         self.completed_tasks.add(task_name)
-
+        self.total_time(task_name)
         self.resource_manager.update_rates(task_name)
 
         if task_name == "Build Metal Extractor":
@@ -138,11 +149,12 @@ class BuildOrderManager:
 
             task_probabilities = {
                 "Build Metal Extractor": 0.5,
-                "Build Solar Collector": 0.5,
+                "Build Solar Collector": 0.4,
                 "Build Builder": 0.5,
                 "Build Energy Converter": 0.5,
                 "Build Factory": 0.5,
                 "Wait 15 Seconds": 0.1,
+                "Build Advanced Solar Collector": 0.6,
             }
 
             extractor_cap = self.metal_extractor_count >= self.max_metal_extractors
@@ -178,16 +190,20 @@ class BuildOrderManager:
 
 
 class BuildOrderFitness:
-    def __init__(self, build_order,):
-        self.efficiency_penalty = 0
-        self.metal_fitness = 0
-        self.energy_fitness = 0
-        self.goal_met_index = 0
+    def __init__(self, build_order):
+        self.to_many_factories = 0
+        self.advanced_building = 0
+        self.waiting_time = 0
+        self.metal_extractor_count = 0
+        self.starting_fitness = 1000  # Base fitness
         self.build_order = build_order
+        self.total_build_time = 0
+        self.prerequisite_violations = False
         self.completed_tasks = set()
-        self.final_fitness = 0
+        self.resource_manager = ResourceManager()
 
     def prerequisite_check(self):
+        # Ensure prerequisites are met in the build order
         for task_info in self.build_order:
             task_name = task_info["task"]
             if task_name in task_prerequisites:
@@ -195,61 +211,105 @@ class BuildOrderFitness:
                     prereq in self.completed_tasks for prereq in task_prerequisites[task_name]
                 )
                 if not prerequisites_met:
+                    self.prerequisite_violations = True
                     return False
             self.completed_tasks.add(task_name)
         return True
 
-    def calculate_fitness(self, energy_production=0, metal_production=0):
+    def simulate_build_order(self):
+        # Simulate the build order and calculate resource accumulation
+        build_order_manager = BuildOrderManager(self.resource_manager)
+        build_time_total = 0
+        waiting_time_total = 0
 
-        # Ensure prerequisites are met before proceeding
-        if not self.prerequisite_check():
-            return -1, {}
-
-        resource_manager = ResourceManager()
-        build_order_manager = BuildOrderManager(resource_manager)
-        build_queue = self.build_order
-
-        goal_met = False
-
-        for index, task_info in enumerate(build_queue):
+        for task_info in self.build_order:
             task_name = task_info["task"]
+
+            # Simulate building the task
             build_time = build_order_manager.build_task(task_name)
             if build_time == -1:
-                return -1, {}
-            metal_rate = resource_manager.get_current_metal_rate()
-            energy_rate = resource_manager.get_current_energy_rate()
+                # Apply a small penalty for failed builds
+                self.starting_fitness -= 50
+                build_order_manager.build_task("Wait 15 Seconds")
+                build_time = 15  # Simulated wait time
+            if task_name == "Build Metal Extractor":
+                self.metal_extractor_count += 1
+            if task_name == "Build Advanced Solar Collector":
+                self.advanced_building += 1
+            if task_name == "Build Factory":
+                self.to_many_factories += 1
 
-            if not goal_met and metal_rate >= METAL_RATE_GOAL and energy_rate >= ENERGY_RATE_GOAL:
-                self.goal_met_index = index
-                goal_met = True
+            if task_name == "Wait 15 Seconds":
+                waiting_time_total += build_time
+            build_time_total += build_time
 
-        # Compute the energy fitness
-        if resource_manager.get_current_energy_rate() >= ENERGY_RATE_GOAL:
-            energy_production += 500
-        energy_penalty = max(resource_manager.get_current_energy_rate() - ENERGY_RATE_GOAL*1.5, 0)
-        self.energy_fitness = energy_production - energy_penalty
+            # Simulate resource accumulation during build time
+            self.resource_manager.accumulate_resources(build_time)
 
-        # Compute the metal fitness
-        if resource_manager.get_current_metal_rate() >= METAL_RATE_GOAL:
-            metal_production += 500
-        metal_penalty = max(resource_manager.get_current_metal_rate() - METAL_RATE_GOAL, 0)
-        self.metal_fitness = metal_production - metal_penalty
+        self.total_build_time = build_time_total
+        self.waiting_time = waiting_time_total
 
-        self.efficiency_penalty = self.goal_met_index
+    def calculate_fitness(self):
+        if not self.prerequisite_check():
+            # Penalty for not meeting prerequisites
+            self.starting_fitness -= 100
 
-        self.final_fitness = self.energy_fitness + self.metal_fitness - self.efficiency_penalty
+        self.simulate_build_order()  # Simulate the build order to get data
 
-        if build_order_manager.metal_extractor_count >= build_order_manager.max_metal_extractors:
-            self.final_fitness = 0
+        # Calculate the current energy-to-metal ratio
+        metal_rate = self.resource_manager.get_current_metal_rate()
+        energy_rate = self.resource_manager.get_current_energy_rate()
 
-        # Add extra stats for debugging or additional insights
+        if metal_rate == 0:
+            ratio = float("inf")  # Infinite ratio if no metal production
+        else:
+            ratio = energy_rate / metal_rate
+
+        # Calculate ratio deviation
+        ratio_penalty = abs(DESIRED_ENERGY_METAL_RATIO - ratio) * 50  # Scale penalty
+
+        # Metal extractor penalties
+        if self.metal_extractor_count > MAX_METAL_EXTRACTORS:
+            # Penalty for exceeding the maximum extractors
+            metal_extractor_penalty = (self.metal_extractor_count - MAX_METAL_EXTRACTORS) * 50
+        elif self.metal_extractor_count < MAX_METAL_EXTRACTORS:
+            # Penalty for having fewer than the maximum extractors
+            metal_extractor_penalty = (MAX_METAL_EXTRACTORS - self.metal_extractor_count) * 25
+        else:
+            metal_extractor_penalty = 0
+
+        # Fitness calculation with ratio penalty
+        resource_penalty = self.waiting_time  # Encourage shorter build times
+        tech_bonus = self.advanced_building * 50  # Encourage better builds
+        to_many_factories = (self.to_many_factories - 1) * 50
+        # Penalty for prerequisite violations
+        illegal_move_fitness = 0
+        if self.prerequisite_violations:
+            illegal_move_fitness = 100
+        fitness = (
+                self.starting_fitness
+                - ratio_penalty
+                - metal_extractor_penalty
+                - resource_penalty
+                + tech_bonus
+                - to_many_factories
+                - illegal_move_fitness
+        )
+
         extra_stats = {
-            "energy_produced": resource_manager.get_current_energy(),
-            "metal_produced": resource_manager.get_current_metal(),
-            "total_time": build_order_manager.total_build_time(),
+            "total_build_time": self.total_build_time,
+            "energy_rate": energy_rate,
+            "metal_rate": metal_rate,
+            "energy_metal_ratio": ratio,
+            "ratio_penalty": ratio_penalty,
+            "metal_extractor_penalty": metal_extractor_penalty,
+            "resource_penalty": resource_penalty,
+            "Tech_bonus": tech_bonus,
+            "to_many_factories": to_many_factories,
+            "illegal_move_fitness": illegal_move_fitness
         }
 
-        return self.final_fitness, extra_stats
+        return fitness, extra_stats
 
     def get_fitness(self):
         return self.calculate_fitness()[0]
@@ -283,7 +343,7 @@ class GeneticAlgorithm:
         self.mutation_rate = mutation_rate
         self.population = []
         self.fitness_per_generation = []
-        # Populate the initial population using a loop
+        # Populate the initial population
         for _ in range(self.population_size):
             self.population.append(random_build_order())
 
@@ -308,19 +368,35 @@ class GeneticAlgorithm:
         return chromosome
 
     def run(self):
-        best_build_order = None
+        best_order = []
         best_fitness = -1
         best_stats = {}
+
+        # Interactive mode to enable real-time updates
+        plt.ion()
+        fig, ax = plt.subplots()
+        ax.set_title("Best Fitness over Generations")
+        ax.set_xlabel("Generation")
+        ax.set_ylabel("Best Fitness")
 
         for generation in range(self.generations):
             new_population = []
 
-            # Find best order and add to new population
+            # Find the best order and add to the new population
             best_order, best_fitness, best_stats = self.get_best_build_order()
             self.fitness_per_generation.append(best_fitness)  # Store best fitness
-            print(f'Gen: {generation}, Fitness: {best_fitness:.2f}')
-
             new_population.append(best_order)
+
+            ax.cla()  # Clear the existing plot
+            ax.set_title("Best Fitness over Generations")  # Re-apply the title, labels
+            ax.set_xlabel("Generation")
+            ax.set_ylabel("Best Fitness")
+            # Plot all fitness values up to the current generation
+            ax.plot(range(len(self.fitness_per_generation)), self.fitness_per_generation, 'bo-', markersize=5)
+
+            # Redraw and pause to ensure the plot updates
+            plt.draw()
+            plt.pause(0.01)
 
             # Create the rest of the population through crossover and mutation
             for _ in range((self.population_size - 1) // 2):
@@ -334,24 +410,76 @@ class GeneticAlgorithm:
 
             print(f"Generation {generation}: Best Fitness = {best_fitness:.2f}")
 
-            if best_fitness > 800:  # Early stop condition
+            if best_fitness == 1000:  # Early stop condition
                 break
 
-        if best_fitness < 0:
-            raise RuntimeError("No valid build order found")
+        # End interactive mode
+        plt.ioff()
+        plt.show()
 
-        return best_build_order, best_fitness, best_stats
+        return best_order, best_fitness, best_stats
 
 
 # Function to perform parameter tuning
+class ParameterTuning:
+    def __init__(self, generations, population_sizes, tournament_sizes, mutation_rates):
+        # Accept ranges for parameters to be tested
+        self.generations = generations  # Total generations to run
+        self.population_sizes = population_sizes  # List of population sizes to test
+        self.tournament_sizes = tournament_sizes  # List of tournament sizes to test
+        self.mutation_rates = mutation_rates  # List of mutation rates to test
+
+        # To store results of parameter tuning
+        self.results = []
+
+    def tune_parameters(self):
+        for population_size in self.population_sizes:
+            for tournament_size in self.tournament_sizes:
+                for mutation_rate in self.mutation_rates:
+                    # Run the Genetic Algorithm with the current parameters
+                    ga = GeneticAlgorithm(
+                        generations=self.generations,
+                        population_size=population_size,
+                        tournament_size=tournament_size,
+                        mutation_rate=mutation_rate,
+                    )
+
+                    best_order, best_fitness, best_stats = ga.run()
+
+                    # Collect results for analysis
+                    self.results.append({
+                        "population_size": population_size,
+                        "tournament_size": tournament_size,
+                        "mutation_rate": mutation_rate,
+                        "best_fitness": best_fitness,
+                        "best_order": best_order,
+                        "best_stats": best_stats,
+                    })
+
+    def get_best_configuration(self):
+        # Return the parameter configuration with the highest fitness
+        return max(self.results, key=lambda result: result["best_fitness"])
+
 
 RUN_GENETIC_ALGORITHM = True  # Set to True to run the genetic algorithm
 
 if __name__ == "__main__":
     if RUN_GENETIC_ALGORITHM:
         # Run the genetic algorithm
-        ga = GeneticAlgorithm(generations=2000, population_size=50, tournament_size=5, mutation_rate=0.5)
+        ga = GeneticAlgorithm(generations=1000, population_size=100, tournament_size=5, mutation_rate=0.5)
         best_order, best_fitness, best_stats = ga.run()
+
+        # Print the best build order
+        print("Best Build Order:")
+        for task in best_order:
+            task_name = task["task"]
+            build_time = task.get("build_time", "N/A")
+            print(f"- {task_name}, Build Time: {build_time:.2f} seconds")
+
+        # Print the best stats
+        print("\nBest Stats:")
+        for key, value in best_stats.items():
+            print(f"{key}: {value}")
 
         # Plot the best fitness over generations
         plt.plot(range(len(ga.fitness_per_generation)), ga.fitness_per_generation, 'bo-', markersize=5)
@@ -359,4 +487,39 @@ if __name__ == "__main__":
         plt.xlabel("Generation")
         plt.ylabel("Best Fitness")
         plt.show()
+    else:
+        # Define ranges for parameter tuning
+        generations = 1000
+        population_sizes = [10, 25, 50, 100]
+        tournament_sizes = [3, 5, 7]
+        mutation_rates = [0.1, 0.3, 0.5, 0.7]
+
+        # Initialize the parameter tuning class
+        tuner = ParameterTuning(generations, population_sizes, tournament_sizes, mutation_rates)
+
+        # Perform parameter tuning
+        tuner.tune_parameters()
+
+        # Get the best configuration
+        best_configuration = tuner.get_best_configuration()
+
+        print("Best Configuration:")
+        for key, value in best_configuration.items():
+            if key != "best_order":  # Avoid printing the entire build order here
+                print(f"{key}: {value}")
+
+        print("\nBest Build Order:")
+        for task in best_configuration["best_order"]:
+            task_name = task["task"]
+            build_time = task.get("build_time", "N/A")
+            print(f"- {task_name}, Build Time: {build_time:.2f} seconds")
+
+        # Optional: Plot the best fitness over generations for the best configuration
+        plt.plot(range(len(tuner.results)), [r["best_fitness"] for r in tuner.results], 'bo-', markersize=5)
+        plt.title("Best Fitness for Different Configurations")
+        plt.xlabel("Configuration Index")
+        plt.ylabel("Best Fitness")
+        plt.show()
+
+
 
