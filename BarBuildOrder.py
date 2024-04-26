@@ -2,6 +2,8 @@ import concurrent
 import itertools
 import random
 
+from matplotlib import pyplot as plt
+
 # Task configuration
 tasks = {
     "Build Factory": {"metal_cost": 620, "energy_cost": 1300, "base_build_time": 65},
@@ -19,8 +21,8 @@ task_prerequisites = {
 
 # Constants
 MAX_METAL_EXTRACTORS = 3
-METAL_RATE_GOAL = 60
-ENERGY_RATE_GOAL = 600
+METAL_RATE_GOAL = 10
+ENERGY_RATE_GOAL = 30
 METAL_ENERGY_RATIO = METAL_RATE_GOAL / ENERGY_RATE_GOAL
 MAX_TASK = 100
 
@@ -85,18 +87,30 @@ class BuildOrderManager:
         ]
 
     def can_build(self, task_name):
+        # If the task is "Wait 15 Seconds", always return True
+        if task_name == "Wait 15 Seconds":
+            return True  # No resource check needed for this task
+
+        # Otherwise, perform the normal resource check
         task = tasks[task_name]
+        current_metal = self.resource_manager.get_current_metal()
+        current_energy = self.resource_manager.get_current_energy()
+
         return (
-                self.resource_manager.get_current_metal() >= task["metal_cost"]
-                and self.resource_manager.get_current_energy() >= task["energy_cost"]
+                current_metal >= task["metal_cost"] and
+                current_energy >= task["energy_cost"]
         )
 
     def build_task(self, task_name):
         if not self.can_build(task_name):
             return -1  # Task can't be built
-
         task = tasks[task_name]
-        build_time = task["base_build_time"] / (self.resource_manager.build_power / 100)
+        # Check if the task is "Wait 15 Seconds"
+        if task_name == "Wait 15 Seconds":
+            build_time = 15  # Directly set the build time to 15 seconds
+        else:
+            # Calculate build time based on build power
+            build_time = task["base_build_time"] / (self.resource_manager.build_power / 100)
 
         self.resource_manager.accumulate_resources(build_time)
         self.resource_manager.deduct_resources(task["metal_cost"], task["energy_cost"])
@@ -118,8 +132,9 @@ class BuildOrderManager:
 
             if not valid_tasks:
                 # If no valid tasks, wait and continue
-                self.build_task("Wait 15 Seconds")
-                continue
+                build_time = self.build_task("Wait 15 Seconds")
+                if build_time == -1:
+                    continue
 
             task_probabilities = {
                 "Build Metal Extractor": 0.5,
@@ -127,7 +142,7 @@ class BuildOrderManager:
                 "Build Builder": 0.5,
                 "Build Energy Converter": 0.5,
                 "Build Factory": 0.5,
-                "Wait 15 Seconds": 0.5,
+                "Wait 15 Seconds": 0.1,
             }
 
             extractor_cap = self.metal_extractor_count >= self.max_metal_extractors
@@ -142,6 +157,9 @@ class BuildOrderManager:
             )[0]
 
             build_time = self.build_task(chosen_task)
+            if build_time == -1:
+                self.build_task("Wait 15 Seconds")  # Fallback to waiting
+                continue
 
             # Add task prerequisites if applicable
             for key, prerequisites in task_prerequisites.items():
@@ -161,10 +179,10 @@ class BuildOrderManager:
 
 class BuildOrderFitness:
     def __init__(self, build_order,):
-        self.efficiency_penalty = None
-        self.metal_fitness = None
-        self.energy_fitness = None
-        self.goal_met_index = None
+        self.efficiency_penalty = 0
+        self.metal_fitness = 0
+        self.energy_fitness = 0
+        self.goal_met_index = 0
         self.build_order = build_order
         self.completed_tasks = set()
         self.final_fitness = 0
@@ -181,7 +199,7 @@ class BuildOrderFitness:
             self.completed_tasks.add(task_name)
         return True
 
-    def calculate_fitness(self, energy_production=None, metal_production=None):
+    def calculate_fitness(self, energy_production=0, metal_production=0):
 
         # Ensure prerequisites are met before proceeding
         if not self.prerequisite_check():
@@ -237,18 +255,37 @@ class BuildOrderFitness:
         return self.calculate_fitness()[0]
 
 
+def random_build_order():
+    resource_manager = ResourceManager()
+    build_order_manager = BuildOrderManager(resource_manager)
+    return build_order_manager.create_build_order()
+
+
+def crossover(parent1, parent2):
+    if len(parent1) <= 1 or len(parent2) <= 1:
+        return parent1, parent2
+
+    point = random.randint(1, min(len(parent1), len(parent2)) - 1)
+    child1 = parent1[:point] + parent2[point:]
+    child2 = parent2[:point] + parent1[point:]
+
+    if not BuildOrderFitness(child1).prerequisite_check() or not BuildOrderFitness(child2).prerequisite_check():
+        return parent1, parent2
+
+    return child1, child2
+
+
 class GeneticAlgorithm:
     def __init__(self, generations, population_size, tournament_size, mutation_rate):
         self.generations = generations
         self.population_size = population_size
         self.tournament_size = tournament_size
         self.mutation_rate = mutation_rate
-        self.population = [self.random_build_order() for _ in range(population_size)]
-
-    def random_build_order(self):
-        resource_manager = ResourceManager()
-        build_order_manager = BuildOrderManager(resource_manager)
-        return build_order_manager.create_build_order()
+        self.population = []
+        self.fitness_per_generation = []
+        # Populate the initial population using a loop
+        for _ in range(self.population_size):
+            self.population.append(random_build_order())
 
     def get_best_build_order(self):
         best_order = max(self.population, key=lambda bo: BuildOrderFitness(bo).get_fitness())
@@ -258,19 +295,6 @@ class GeneticAlgorithm:
     def tournament_selection(self):
         selected = random.sample(self.population, self.tournament_size)
         return max(selected, key=lambda bo: BuildOrderFitness(bo).get_fitness())
-
-    def crossover(self, parent1, parent2):
-        if len(parent1) <= 1 or len(parent2) <= 1:
-            return parent1, parent2
-
-        point = random.randint(1, min(len(parent1), len(parent2)) - 1)
-        child1 = parent1[:point] + parent2[point:]
-        child2 = parent2[:point] + parent1[point:]
-
-        if not BuildOrderFitness(child1).prerequisite_check() or not BuildOrderFitness(child2).prerequisite_check():
-            return parent1, parent2
-
-        return child1, child2
 
     def mutation(self, chromosome):
         if len(chromosome) <= 1:
@@ -293,13 +317,16 @@ class GeneticAlgorithm:
 
             # Find best order and add to new population
             best_order, best_fitness, best_stats = self.get_best_build_order()
+            self.fitness_per_generation.append(best_fitness)  # Store best fitness
+            print(f'Gen: {generation}, Fitness: {best_fitness:.2f}')
+
             new_population.append(best_order)
 
-            # Create rest of the population through crossover and mutation
+            # Create the rest of the population through crossover and mutation
             for _ in range((self.population_size - 1) // 2):
                 parent1 = self.tournament_selection()
                 parent2 = self.tournament_selection()
-                child1, child2 = self.crossover(parent1, parent2)
+                child1, child2 = crossover(parent1, parent2)
                 new_population.append(self.mutation(child1))
                 new_population.append(self.mutation(child2))
 
@@ -307,10 +334,10 @@ class GeneticAlgorithm:
 
             print(f"Generation {generation}: Best Fitness = {best_fitness:.2f}")
 
-            if best_fitness > 800:
+            if best_fitness > 800:  # Early stop condition
                 break
 
-        if best_fitness < 0:  # No valid build orders found
+        if best_fitness < 0:
             raise RuntimeError("No valid build order found")
 
         return best_build_order, best_fitness, best_stats
@@ -322,10 +349,14 @@ RUN_GENETIC_ALGORITHM = True  # Set to True to run the genetic algorithm
 
 if __name__ == "__main__":
     if RUN_GENETIC_ALGORITHM:
+        # Run the genetic algorithm
         ga = GeneticAlgorithm(generations=2000, population_size=50, tournament_size=5, mutation_rate=0.5)
         best_order, best_fitness, best_stats = ga.run()
 
-        print("Optimal build order:", best_order)
-        print("Best fitness:", best_fitness)
-        print("Additional stats:", best_stats)
+        # Plot the best fitness over generations
+        plt.plot(range(len(ga.fitness_per_generation)), ga.fitness_per_generation, 'bo-', markersize=5)
+        plt.title("Best Fitness over Generations")
+        plt.xlabel("Generation")
+        plt.ylabel("Best Fitness")
+        plt.show()
 
