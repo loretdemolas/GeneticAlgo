@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/Genetic Algo for bar.iml" filepath="$PROJECT_DIR$/Genetic Algo for bar.iml" />
+      <module fileurl="file://$PROJECT_DIR$/deprec/deprec.iml" filepath="$PROJECT_DIR$/deprec/deprec.iml" />
     </modules>
   </component>
 </project>
