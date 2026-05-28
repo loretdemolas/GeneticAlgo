@@ -33,18 +33,19 @@ class ResourceManager:
     def update_rates(self, task_name):
         if task_name == "Build Metal Extractor":
             self.metal_rate += 1.8
+            self.energy_rate -= 3.0
         elif task_name == "Build Solar Collector":
-            self.energy_rate += 20
+            self.energy_rate += 20.0
         elif task_name == "Build Energy Converter":
-            self.energy_rate -= 70
-            self.metal_rate += 1
+            self.energy_rate -= 70.0
+            self.metal_rate += 1.0
         elif task_name == "Build Builder":
-            self.build_power += 100
+            self.build_power += 100.0
         elif task_name == "Build Advanced Solar Collector":
-            self.energy_rate += 75
+            self.energy_rate += 75.0
         elif task_name == "Build Advanced Metal Extractor":
-            self.metal_rate += 8
+            self.metal_rate += 8.0
         elif task_name == "Build Advanced Energy Converter":
-            self.energy_rate -= 600
+            self.energy_rate -= 600.0
             self.metal_rate += 10.3
 

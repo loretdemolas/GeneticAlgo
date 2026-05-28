@@ -1,19 +1,7 @@
 # main.py
 import matplotlib.pyplot as plt
-from genetic_algorithm import GeneticAlgorithm
-from parameter_tuning import ParameterTuning
-
-
-def count_task_types(build_order):
-    # Create a dictionary to count each task type
-    task_count = {}
-    for task_info in build_order:
-        task_name = task_info["task"]
-        if task_name in task_count:
-            task_count[task_name] += 1
-        else:
-            task_count[task_name] = 1
-    return task_count
+from src.genetic_algorithm import GeneticAlgorithm
+from src.parameter_tuning import ParameterTuning
 
 
 RUN_GENETIC_ALGORITHM = True  # Set to True to run the genetic algorithm

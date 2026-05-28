@@ -15,16 +15,19 @@ tasks = {
 }
 
 # Prerequisites for building tasks
-task_prerequisites = {
+phase_one_task_prerequisites = {
     "Build Builder": ["Build Factory"],
     "Build Advanced Solar Collector": ["Build Builder"],
+}
+phase_two_task_prerequisites = {
     "Build Advanced Factory": ["Build Builder"],
     "Build Advanced Builder": ["Build Advanced Factory"],
     "Build Advanced Metal Extractor": ["Build Advanced Builder"],
     "Build Advanced Energy Converter": ["Build Advanced Builder"],
 }
-
 # Constants
 MAX_METAL_EXTRACTORS = 6
 DESIRED_ENERGY_METAL_RATIO = 10.0
 MAX_TASK = 100
+PHASE_ONE_METAL_GOAL = 20
+PHASE_ONE_Energy_GOAL = 200

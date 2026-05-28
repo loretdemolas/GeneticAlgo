@@ -1,5 +1,5 @@
 # parameter_tuning.py
-from genetic_algorithm import GeneticAlgorithm
+from src.genetic_algorithm import GeneticAlgorithm
 
 
 class ParameterTuning:

@@ -1,7 +1,7 @@
 # genetic_algorithm.py
 import random
-from build_order_fitness import BuildOrderFitness
-from build_order_manager import BuildOrderManager
+from src.build_order_fitness import BuildOrderFitness
+from src.build_order_manager import BuildOrderManager
 from resource_manager import ResourceManager
 
 
